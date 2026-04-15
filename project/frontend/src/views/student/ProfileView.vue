@@ -6,7 +6,7 @@
       </div>
 
       <div class="flex-1 overflow-auto p-6">
-        <div class="max-w-3xl mx-auto space-y-6">
+        <div class="max-w-7xl mx-auto space-y-6">
           <div class="bg-white rounded-xl border border-gray-100 p-6">
             <div class="flex items-center gap-6">
               <div class="w-24 h-24 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl flex items-center justify-center">
