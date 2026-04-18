@@ -44,15 +44,6 @@
         </div>
       </div>
     </div>
-
-    <div class="p-2 border-t border-gray-50">
-      <div class="flex flex-col items-center gap-1">
-        <div class="flex items-center gap-1">
-          <span class="w-2 h-2 rounded-full bg-green-500"></span>
-          <span class="text-[10px] text-gray-500">系统就绪</span>
-        </div>
-      </div>
-    </div>
   </aside>
 </template>
 

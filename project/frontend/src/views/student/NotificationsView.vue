@@ -14,7 +14,7 @@
       </div>
 
       <div class="flex-1 overflow-auto p-6">
-        <div class="max-w-4xl mx-auto space-y-4">
+        <div class="max-w-7xl mx-auto space-y-4">
           <div
             v-for="notification in notifications"
             :key="notification.id"

@@ -6,7 +6,7 @@
       </div>
 
       <div class="flex-1 overflow-auto p-6">
-        <div class="max-w-4xl mx-auto space-y-6">
+        <div class="max-w-7xl mx-auto space-y-6">
           <div class="bg-white rounded-xl border border-gray-100 p-6">
             <h3 class="text-lg font-semibold text-gray-900 mb-4">快速入口</h3>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
