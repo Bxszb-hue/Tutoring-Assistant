@@ -15,9 +15,19 @@ def supervisor_node(state: UserState) -> UserState:
         return state
     
     # 分析用户输入，识别意图
+    # 只有当最后一条消息是用户消息时才进行意图识别
     if state.conversation_history:
         last_message = state.conversation_history[-1]
         if last_message['role'] == 'user':
+            # 检查是否已经处理过这个用户消息（防止重复处理）
+            if state.context.get("last_user_message") == last_message['content']:
+                # 已经在这一轮处理过了，设置结束标记
+                state.current_intent = "finished"
+                return state
+            
+            # 记录当前用户消息
+            state.context["last_user_message"] = last_message['content']
+            
             # 增强的意图识别逻辑
             content = last_message['content'].lower()
             
@@ -110,6 +120,12 @@ def supervisor_node(state: UserState) -> UserState:
             if state.current_task and state.task_progress.get(state.current_task, {}).get('status') == 'processing':
                 # 保持当前意图，继续处理未完成的任务
                 pass
+        else:
+            # 最后一条消息不是用户消息，设置结束标记
+            state.current_intent = "finished"
+    else:
+        # 没有对话历史，设置默认意图
+        state.current_intent = "finished"
     return state
 
 def qa_agent_node(state: UserState) -> UserState:
@@ -426,6 +442,7 @@ def create_workflow():
     workflow.add_conditional_edges(
         "supervisor",
         lambda x: {
+            "finished": "finished",
             "human": "human",
             "qa": "qa",
             "transaction": "transaction",
@@ -434,8 +451,9 @@ def create_workflow():
             "report": "report",
             "notification": "notification",
             "ticket": "ticket"
-        }.get(x.current_intent or "", "continue"),
+        }.get(x.current_intent or "", "finished"),
         {
+            "finished": END,
             "human": "human_in_the_loop",
             "qa": "qa_agent",
             "transaction": "transaction_agent",
@@ -444,7 +462,6 @@ def create_workflow():
             "report": "report_agent",
             "notification": "notification_agent",
             "ticket": "ticket_agent",
-            "continue": "supervisor"
         }
     )
     
