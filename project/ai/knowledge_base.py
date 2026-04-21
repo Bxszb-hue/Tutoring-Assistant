@@ -1,9 +1,14 @@
 import os
 import json
 from typing import List, Dict, Any, Optional
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.schema import Document
+try:
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+    from langchain_community.vectorstores import FAISS
+    from langchain_core.documents import Document
+except ImportError:
+    from langchain.embeddings import HuggingFaceEmbeddings
+    from langchain.vectorstores import FAISS
+    from langchain.schema import Document
 
 class KnowledgeBaseTool:
     def __init__(self, embeddings_model: str = "sentence-transformers/all-MiniLM-L6-v2"):
@@ -73,15 +78,25 @@ class KnowledgeBaseTool:
         
         for root, _, files in os.walk(directory):
             for file in files:
-                if file.endswith(".txt") or file.endswith(".md"):
+                if file.endswith(".txt") or file.endswith(".md") or file.endswith(".json"):
                     file_path = os.path.join(root, file)
                     try:
                         with open(file_path, "r", encoding="utf-8") as f:
                             content = f.read()
                         
+                        # 确定文档类型
+                        category = "general"
+                        if "regulations" in directory:
+                            category = "regulation"
+                        elif "processes" in directory:
+                            category = "process"
+                        elif "faq" in directory:
+                            category = "faq"
+                        
                         metadata = {
                             "source": file_path,
-                            "filename": file
+                            "filename": file,
+                            "category": category
                         }
                         
                         if self.add_document(content, metadata):
@@ -90,6 +105,92 @@ class KnowledgeBaseTool:
                         print(f"处理文件 {file_path} 失败: {e}")
         
         return added_count
+    
+    def add_regulation(self, title: str, content: str, regulation_type: str, 
+                      effective_date: str = "", file_number: str = "") -> bool:
+        """
+        添加规章制度文档
+        
+        Args:
+            title: 规章制度标题
+            content: 规章制度内容
+            regulation_type: 制度类型（如：违纪处分、奖学金、心理健康等）
+            effective_date: 生效日期
+            file_number: 文件编号
+        
+        Returns:
+            bool: 是否添加成功
+        """
+        metadata = {
+            "category": "regulation",
+            "title": title,
+            "regulation_type": regulation_type,
+            "effective_date": effective_date,
+            "file_number": file_number
+        }
+        return self.add_document(content, metadata)
+    
+    def add_process(self, process_name: str, process_steps: List[str], 
+                  process_description: str, department: str = "") -> bool:
+        """
+        添加办事流程文档
+        
+        Args:
+            process_name: 流程名称
+            process_steps: 流程步骤列表
+            process_description: 流程描述
+            department: 负责部门
+        
+        Returns:
+            bool: 是否添加成功
+        """
+        content = f"{process_name}\n\n{process_description}\n\n办理步骤:\n"
+        for i, step in enumerate(process_steps, 1):
+            content += f"{i}. {step}\n"
+        
+        metadata = {
+            "category": "process",
+            "process_name": process_name,
+            "department": department
+        }
+        return self.add_document(content, metadata)
+    
+    def add_faq(self, question: str, answer: str, category: str = "general") -> bool:
+        """
+        添加FAQ文档
+        
+        Args:
+            question: 问题
+            answer: 答案
+            category: FAQ分类
+        
+        Returns:
+            bool: 是否添加成功
+        """
+        content = f"Q: {question}\n\nA: {answer}"
+        
+        metadata = {
+            "category": "faq",
+            "question": question,
+            "faq_category": category
+        }
+        return self.add_document(content, metadata)
+    
+    def search_by_category(self, query: str, category: str, k: int = 3) -> List[Document]:
+        """
+        按类别搜索知识库
+        
+        Args:
+            query: 搜索查询
+            category: 文档类别
+            k: 返回的文档数量
+        
+        Returns:
+            List[Document]: 搜索结果
+        """
+        all_results = self.search(query, k * 2)
+        filtered_results = [doc for doc in all_results if doc.metadata.get("category") == category]
+        return filtered_results[:k]
     
     def search(self, query: str, k: int = 3) -> List[Document]:
         """
