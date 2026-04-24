@@ -219,15 +219,15 @@ const sendMessage = async (text?: string) => {
     
     if (backendConnected.value) {
       try {
-        const apiResponse = await fetch('http://localhost:8000/api/chat', {
+        const apiResponse = await fetch('http://localhost:8000/chat', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            message: message,
-            role: props.role || 'student',
-            user_id: authStore.currentUser?.id
+            user_id: authStore.currentUser?.id || 'unknown',
+            user_type: props.role || 'student',
+            content: message
           })
         })
         

@@ -1,14 +1,7 @@
 import os
 import json
+import re
 from typing import List, Dict, Any, Optional
-try:
-    from langchain_community.embeddings import HuggingFaceEmbeddings
-    from langchain_community.vectorstores import FAISS
-    from langchain_core.documents import Document
-except ImportError:
-    from langchain.embeddings import HuggingFaceEmbeddings
-    from langchain.vectorstores import FAISS
-    from langchain.schema import Document
 
 class KnowledgeBaseTool:
     def __init__(self, embeddings_model: str = "sentence-transformers/all-MiniLM-L6-v2"):
@@ -18,13 +11,62 @@ class KnowledgeBaseTool:
         Args:
             embeddings_model: 用于生成文本嵌入的模型名称
         """
-        self.embeddings = HuggingFaceEmbeddings(model_name=embeddings_model)
+        self.embeddings = None
         self.vectorstore = None
         self.knowledge_base_path = "knowledge_base"
         self.documents_path = os.path.join(self.knowledge_base_path, "documents")
+        self.documents = []  # 存储文档内容用于关键词搜索
         
         # 创建必要的目录
         os.makedirs(self.documents_path, exist_ok=True)
+        
+        # 尝试初始化向量存储
+        self._initialize_vectorstore()
+        
+        # 尝试加载现有的向量存储
+        if not self.load("vectorstore"):
+            # 如果向量存储不存在，尝试从目录加载文档
+            self._load_from_directory()
+            # 保存向量存储
+            self.save("vectorstore")
+    
+    def _initialize_vectorstore(self):
+        """
+        初始化向量存储
+        """
+        try:
+            from langchain_huggingface import HuggingFaceEmbeddings
+            from langchain_community.vectorstores import FAISS
+            self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            print("Successfully initialized HuggingFace embeddings")
+        except Exception as e:
+            print(f"Could not initialize HuggingFace embeddings: {str(e)}")
+            print("Will use keyword-based search as fallback")
+            self.embeddings = None
+    
+    def _load_from_directory(self):
+        """
+        从知识库目录加载文档
+        """
+        print("正在从目录加载知识库文档...")
+        
+        # 定义需要处理的目录
+        directories_to_process = [
+            os.path.join(self.knowledge_base_path, "faq"),
+            os.path.join(self.knowledge_base_path, "processes"),
+            os.path.join(self.knowledge_base_path, "psychological_guidance"),
+            os.path.join(self.knowledge_base_path, "regulations")
+        ]
+        
+        total_added = 0
+        for directory in directories_to_process:
+            if os.path.exists(directory):
+                print(f"正在处理目录: {directory}")
+                added = self.add_documents_from_directory(directory)
+                total_added += added
+                print(f"  成功添加 {added} 个文件")
+        
+        print(f"共添加 {total_added} 个文档到知识库")
     
     def add_document(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> bool:
         """
@@ -41,14 +83,30 @@ class KnowledgeBaseTool:
             if metadata is None:
                 metadata = {}
             
-            # 创建Document对象
-            document = Document(page_content=content, metadata=metadata)
+            # 存储文档内容用于关键词搜索
+            self.documents.append({
+                "content": content,
+                "metadata": metadata
+            })
             
-            # 初始化或更新向量存储
-            if self.vectorstore is None:
-                self.vectorstore = FAISS.from_documents([document], self.embeddings)
-            else:
-                self.vectorstore.add_documents([document])
+            # 如果有embeddings则创建向量存储
+            if self.embeddings is not None:
+                try:
+                    from langchain_core.documents import Document
+                    from langchain_community.vectorstores import FAISS
+                    document = Document(page_content=content, metadata=metadata)
+                    
+                    # 初始化或更新向量存储
+                    if self.vectorstore is None:
+                        self.vectorstore = FAISS.from_documents([document], self.embeddings)
+                    else:
+                        self.vectorstore.add_documents([document])
+                except ImportError as e:
+                    print(f"FAISS not available, skipping vector storage: {e}")
+                    # 继续使用关键词搜索
+                except Exception as e:
+                    print(f"Error creating vector store: {e}")
+                    # 继续使用关键词搜索
             
             # 保存文档到本地
             doc_id = len(os.listdir(self.documents_path))
@@ -176,7 +234,7 @@ class KnowledgeBaseTool:
         }
         return self.add_document(content, metadata)
     
-    def search_by_category(self, query: str, category: str, k: int = 3) -> List[Document]:
+    def search_by_category(self, query: str, category: str, k: int = 3) -> List:
         """
         按类别搜索知识库
         
@@ -192,7 +250,7 @@ class KnowledgeBaseTool:
         filtered_results = [doc for doc in all_results if doc.metadata.get("category") == category]
         return filtered_results[:k]
     
-    def search(self, query: str, k: int = 3) -> List[Document]:
+    def search(self, query: str, k: int = 3) -> List:
         """
         搜索知识库
         
@@ -201,19 +259,66 @@ class KnowledgeBaseTool:
             k: 返回的文档数量
         
         Returns:
-            List[Document]: 搜索结果
+            List: 搜索结果
         """
-        if self.vectorstore is None:
+        # 优先使用向量搜索
+        if self.vectorstore is not None and self.embeddings is not None:
+            try:
+                results = self.vectorstore.similarity_search(query, k=k)
+                return results
+            except Exception as e:
+                print(f"向量搜索失败: {e}")
+        
+        # 降级到关键词搜索
+        return self._keyword_search(query, k)
+    
+    def _keyword_search(self, query: str, k: int = 3) -> List:
+        """
+        基于关键词的搜索
+        
+        Args:
+            query: 搜索查询
+            k: 返回的文档数量
+        
+        Returns:
+            List: 搜索结果
+        """
+        print(f"使用关键词搜索: {query}")
+        
+        if not self.documents:
             return []
         
-        try:
-            results = self.vectorstore.similarity_search(query, k=k)
-            return results
-        except Exception as e:
-            print(f"搜索失败: {e}")
-            return []
+        # 计算查询词与每个文档的相关性分数
+        query_keywords = set(re.findall(r'[\w]+', query.lower()))
+        scored_results = []
+        
+        for doc in self.documents:
+            content = doc['content'].lower()
+            doc_keywords = set(re.findall(r'[\w]+', content))
+            
+            # 计算关键词匹配数
+            matches = len(query_keywords & doc_keywords)
+            
+            # 如果有匹配，添加到结果
+            if matches > 0:
+                # 计算相关性分数（考虑查询词在文档中出现的次数）
+                score = matches / len(query_keywords) if query_keywords else 0
+                
+                # 创建一个类似Document的对象
+                class DocResult:
+                    def __init__(self, page_content, metadata):
+                        self.page_content = page_content
+                        self.metadata = metadata
+                
+                scored_results.append((DocResult(doc['content'], doc['metadata']), score))
+        
+        # 按分数排序
+        scored_results.sort(key=lambda x: x[1], reverse=True)
+        
+        # 返回前k个结果
+        return [doc for doc, score in scored_results[:k]]
     
-    def search_with_score(self, query: str, k: int = 3) -> List[tuple[Document, float]]:
+    def search_with_score(self, query: str, k: int = 3) -> List:
         """
         搜索知识库并返回相似度分数
         
@@ -247,8 +352,14 @@ class KnowledgeBaseTool:
         try:
             if self.vectorstore is not None:
                 self.vectorstore.save_local(path)
-                return True
-            return False
+            
+            # 同时保存文档列表
+            docs_path = os.path.join(path, "documents.json")
+            os.makedirs(path, exist_ok=True)
+            with open(docs_path, "w", encoding="utf-8") as f:
+                json.dump(self.documents, f, ensure_ascii=False, indent=2)
+            
+            return True
         except Exception as e:
             print(f"保存向量存储失败: {e}")
             return False
@@ -264,7 +375,16 @@ class KnowledgeBaseTool:
             bool: 是否加载成功
         """
         try:
-            if os.path.exists(path):
+            # 首先加载文档列表
+            docs_path = os.path.join(path, "documents.json")
+            if os.path.exists(docs_path):
+                with open(docs_path, "r", encoding="utf-8") as f:
+                    self.documents = json.load(f)
+                print(f"加载了 {len(self.documents)} 个文档")
+            
+            # 尝试加载向量存储
+            if os.path.exists(path) and self.embeddings is not None:
+                from langchain_community.vectorstores import FAISS
                 self.vectorstore = FAISS.load_local(path, self.embeddings)
                 return True
             return False
@@ -299,15 +419,7 @@ class KnowledgeBaseTool:
         Returns:
             int: 文档数量
         """
-        if self.vectorstore is None:
-            return 0
-        
-        try:
-            # 注意：FAISS没有直接获取文档数量的方法，这里通过目录文件数量估计
-            return len(os.listdir(self.documents_path))
-        except Exception as e:
-            print(f"获取文档数量失败: {e}")
-            return 0
+        return len(self.documents)
 
 # 测试代码
 if __name__ == "__main__":

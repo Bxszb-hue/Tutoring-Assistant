@@ -1,43 +1,12 @@
-# 核心依赖
-langgraph
-langchain
-fastapi
-uvicorn
-pydantic
-pydantic-settings
-python-dotenv
-
-# 数据库
-sqlalchemy
-pymysql
-redis
-
-# 向量数据库
-milvus
-qdrant-client
-
-# 消息队列
-pika
-kafka-python
-
-# 数据处理
-pandas
-numpy
-scikit-learn
-
-# 数据可视化
-plotly
-matplotlib
-
-# 安全
-cryptography
-pyjwt
-
-# 测试
-pytest
-httpx
-
-# 工具
-requests
-beautifulsoup4
-lxml
+fastapi==0.104.1
+uvicorn==0.24.0
+sqlalchemy==2.0.23
+pymysql==1.1.0
+python-dotenv==1.0.0
+langgraph==0.0.20
+langchain==0.0.335
+langchain-community==0.0.1
+langchain-ollama==0.1.2
+langchain-huggingface==0.1.2
+sentence-transformers==2.2.2
+ollama==0.1.1

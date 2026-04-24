@@ -1,7 +1,21 @@
 from langgraph.graph import StateGraph, END
 from .state import UserState
+from .knowledge_base import KnowledgeBaseTool
 import re
 from datetime import datetime
+
+# 配置Ollama模型
+try:
+    from langchain_ollama import OllamaLLM
+    # 初始化Ollama模型
+    llm = OllamaLLM(model="qwen2.5:7b", base_url="http://localhost:11434")
+    # 初始化知识库工具
+    knowledge_base = KnowledgeBaseTool()
+    print("Successfully initialized Ollama model and KnowledgeBase")
+except Exception as e:
+    print(f"Error initializing Ollama model: {str(e)}")
+    llm = None
+    knowledge_base = None
 
 # 定义节点函数
 def supervisor_node(state: UserState) -> UserState:
@@ -139,22 +153,65 @@ def qa_agent_node(state: UserState) -> UserState:
         response = "您好，请问有什么可以帮助您的？"
     else:
         question = last_message['content']
+        print(f"QA Agent processing question: {question}")
         
-        # 简单的问答逻辑
-        if '奖学金' in question:
-            response = "申请奖学金需要满足以下条件：1. 学习成绩优秀，GPA达到3.0以上；2. 无违纪记录；3. 积极参与社会实践活动。具体申请流程可以在学校官网查看，或到辅导员办公室咨询。"
-        elif '宿舍' in question:
-            response = "宿舍相关问题请联系宿管中心，电话：12345678。如需调换宿舍，请提交书面申请给辅导员审批。"
-        elif '请假' in question:
-            response = "请假需要在系统中提交申请，填写请假原因和时间，经辅导员审批后生效。病假需要提供医院证明。"
-        elif '就业' in question:
-            response = "就业相关信息可以关注学校就业指导中心网站，或参加每周的就业宣讲会。如有具体问题，可以预约就业指导老师进行咨询。"
+        # 从知识库中搜索相关信息
+        knowledge_context = ""
+        if knowledge_base is not None:
+            try:
+                print("Searching knowledge base...")
+                search_results = knowledge_base.search(question, k=3)
+                if search_results:
+                    print(f"Found {len(search_results)} results from knowledge base")
+                    knowledge_context = "根据知识库信息：\n"
+                    for i, result in enumerate(search_results, 1):
+                        knowledge_context += f"{i}. {result.page_content[:200]}...\n"
+                else:
+                    print("No results found in knowledge base")
+            except Exception as e:
+                print(f"Error searching knowledge base: {str(e)}")
+        
+        # 尝试使用Ollama模型生成回答
+        if llm is not None:
+            try:
+                print("Using Ollama model to generate response...")
+                # 构建提示词
+                prompt = f"""你是一个辅导员学生管理智能体的AI助手。请回答学生的问题。
+                
+{knowledge_context}
+
+学生问题：{question}
+
+请基于知识库信息，给出专业、友好、有帮助的回答。如果涉及具体事务办理，请告诉学生具体的流程和注意事项。"""
+                
+                # 调用Ollama模型
+                response = llm.invoke(prompt)
+                print(f"Ollama response: {response[:100]}...")
+            except Exception as e:
+                print(f"Error calling Ollama model: {str(e)}")
+                # 如果模型调用失败，使用简单的问答逻辑
+                response = get_simple_qa_response(question)
         else:
-            response = "您好，我是智能问答助手，请问有什么可以帮助您的？如果您有具体问题，可以详细描述，我会尽力为您解答。"
+            print("Ollama model not available, using simple QA response")
+            # 如果没有配置Ollama模型，使用简单的问答逻辑
+            response = get_simple_qa_response(question)
     
     # 添加回答到对话历史
     state.add_message("assistant", response, "qa_agent")
     return state
+
+def get_simple_qa_response(question: str) -> str:
+    """简单的问答逻辑，当Ollama模型不可用时使用"""
+    if '奖学金' in question:
+        return "申请奖学金需要满足以下条件：1. 学习成绩优秀，GPA达到3.0以上；2. 无违纪记录；3. 积极参与社会实践活动。具体申请流程可以在学校官网查看，或到辅导员办公室咨询。"
+    elif '宿舍' in question:
+        return "宿舍相关问题请联系宿管中心，电话：12345678。如需调换宿舍，请提交书面申请给辅导员审批。"
+    elif '请假' in question:
+        return "请假需要在系统中提交申请，填写请假原因和时间，经辅导员审批后生效。病假需要提供医院证明。"
+    elif '就业' in question:
+        return "就业相关信息可以关注学校就业指导中心网站，或参加每周的就业宣讲会。如有具体问题，可以预约就业指导老师进行咨询。"
+    else:
+        return "您好，我是智能问答助手，请问有什么可以帮助您的？如果您有具体问题，可以详细描述，我会尽力为您解答。"
 
 def transaction_agent_node(state: UserState) -> UserState:
     """事务办理智能体节点
@@ -465,14 +522,14 @@ def create_workflow():
         }
     )
     
-    # 从各智能体回到监督者的边
+    # 从各智能体到结束的边
     for agent in ["qa_agent", "transaction_agent", "academic_alert_agent", 
                   "psychological_agent", "report_agent", 
                   "notification_agent", "ticket_agent"]:
-        workflow.add_edge(agent, "supervisor")
+        workflow.add_edge(agent, END)
 
-    # 人工介入后回到监督者
-    workflow.add_edge("human_in_the_loop", "supervisor")
+    # 人工介入后结束
+    workflow.add_edge("human_in_the_loop", END)
     
     # 编译工作流
     return workflow.compile()
