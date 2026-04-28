@@ -253,25 +253,87 @@ def academic_alert_agent_node(state: UserState) -> UserState:
     
     监测学业数据，生成预警报告并推送辅导员
     """
-    # 模拟学业预警分析
     last_message = state.get_last_message()
     if not last_message or last_message['role'] != 'user':
         response = "您好，请问您需要了解什么学业相关信息？"
     else:
         request = last_message['content']
+        db = state.context.get('db')
         
-        if '成绩' in request:
-            # 模拟成绩查询结果
-            response = "您最近的成绩如下：高等数学：85分，大学英语：78分，计算机基础：92分。您的平均绩点为3.2，处于班级中等水平。"
-        elif '挂科' in request or '预警' in request:
-            # 模拟预警信息
-            response = "根据您的学业数据，您目前有一门课程（大学物理）成绩未达标，可能需要补考。建议您及时与任课老师沟通，制定学习计划。"
-            state.add_notification("academic_alert", "您有一门课程成绩未达标，需要关注", "high")
-        elif '学分' in request:
-            # 模拟学分查询
-            response = "您当前已修学分：45分，还需修满60分才能毕业。建议您合理安排后续学期的课程。"
+        if db:
+            from .academic_alert_tool import AcademicAlertTool
+            
+            try:
+                alert_tool = AcademicAlertTool(db)
+                student_id = state.user_id
+                
+                if '成绩' in request:
+                    # 查询成绩
+                    from backend.models import Grade, Course
+                    grades = db.query(Grade, Course).join(
+                        Course, Grade.course_id == Course.course_id
+                    ).filter(Grade.student_id == student_id).all()
+                    
+                    if grades:
+                        grade_str = "\n".join([f"{course.course_name}：{grade.score}分" 
+                                             for grade, course in grades])
+                        avg_score = sum(g.score for g, _ in grades) / len(grades)
+                        response = f"您的成绩如下：\n{grade_str}\n\n平均成绩：{avg_score:.1f}分"
+                    else:
+                        response = "暂未查询到您的成绩记录。"
+                
+                elif '挂科' in request or '预警' in request:
+                    # 分析预警
+                    analysis = alert_tool.analyze_student(student_id)
+                    
+                    if analysis['alerts']:
+                        alert_messages = [f"【{a['level']}】{a['message']}" for a in analysis['alerts']]
+                        response = "学业预警分析结果：\n\n" + "\n".join(alert_messages)
+                        
+                        # 创建预警记录
+                        for alert in analysis['alerts']:
+                            alert_tool.generate_alert(
+                                student_id=student_id,
+                                alert_type=alert['type'],
+                                alert_level=alert['level'],
+                                message=alert['message']
+                            )
+                            state.add_notification("academic_alert", alert['message'], alert['level'])
+                    else:
+                        response = "您的学业状况良好，暂无预警信息。"
+                
+                elif '学分' in request:
+                    # 查询学分
+                    credit_info = alert_tool.check_missing_courses(student_id)
+                    if credit_info:
+                        response = f"您当前已修学分：{credit_info['earned_credits']}分，还需修满{credit_info['remaining_credits']}分才能毕业。"
+                    else:
+                        response = "您的学分已达标，可以正常毕业。"
+                
+                else:
+                    # 综合分析
+                    analysis = alert_tool.analyze_student(student_id)
+                    
+                    if analysis['alerts']:
+                        alert_messages = [f"【{a['level']}】{a['message']}" for a in analysis['alerts']]
+                        response = "根据您的学业数据分析：\n\n" + "\n".join(alert_messages)
+                    else:
+                        response = "您的学业状况良好，继续保持！"
+                    
+            except Exception as e:
+                print(f"Error in academic alert agent: {str(e)}")
+                response = "学业预警系统暂时不可用，请稍后重试。"
         else:
-            response = "您好，我是学业预警助手，请问您需要了解什么学业相关信息？"
+            # 数据库不可用时使用模拟数据
+            if '成绩' in request:
+                response = "您最近的成绩如下：高等数学：85分，大学英语：78分，计算机基础：92分。您的平均绩点为3.2，处于班级中等水平。"
+            elif '挂科' in request or '预警' in request:
+                response = "根据您的学业数据，您目前有一门课程（大学物理）成绩未达标，可能需要补考。建议您及时与任课老师沟通，制定学习计划。"
+                state.add_notification("academic_alert", "您有一门课程成绩未达标，需要关注", "high")
+            elif '学分' in request:
+                response = "您当前已修学分：45分，还需修满60分才能毕业。建议您合理安排后续学期的课程。"
+            else:
+                response = "您好，我是学业预警助手，请问您需要了解什么学业相关信息？"
     
     # 添加回答到对话历史
     state.add_message("assistant", response, "academic_alert_agent")

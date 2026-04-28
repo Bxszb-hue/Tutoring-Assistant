@@ -24,7 +24,10 @@ class KnowledgeBaseTool:
         self._initialize_vectorstore()
         
         # 尝试加载现有的向量存储
-        if not self.load("vectorstore"):
+        docs_loaded = self.load("vectorstore")
+        
+        # 只有在文档列表为空时才从目录加载
+        if not docs_loaded or len(self.documents) == 0:
             # 如果向量存储不存在，尝试从目录加载文档
             self._load_from_directory()
             # 保存向量存储
@@ -34,15 +37,9 @@ class KnowledgeBaseTool:
         """
         初始化向量存储
         """
-        try:
-            from langchain_huggingface import HuggingFaceEmbeddings
-            from langchain_community.vectorstores import FAISS
-            self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-            print("Successfully initialized HuggingFace embeddings")
-        except Exception as e:
-            print(f"Could not initialize HuggingFace embeddings: {str(e)}")
-            print("Will use keyword-based search as fallback")
-            self.embeddings = None
+        print("Using keyword-based search only, skipping HuggingFace embeddings")
+        self.embeddings = None
+        # 直接使用关键词搜索，避免网络连接问题
     
     def _load_from_directory(self):
         """
@@ -289,28 +286,39 @@ class KnowledgeBaseTool:
             return []
         
         # 计算查询词与每个文档的相关性分数
-        query_keywords = set(re.findall(r'[\w]+', query.lower()))
+        # 分别提取中文词和英文词
+        chinese_chars = set(re.findall(r'[\u4e00-\u9fa5]', query.lower()))
+        english_words = set(re.findall(r'[a-zA-Z0-9]+', query.lower()))
+        
         scored_results = []
         
         for doc in self.documents:
-            content = doc['content'].lower()
-            doc_keywords = set(re.findall(r'[\w]+', content))
+            content_lower = doc['content'].lower()
             
-            # 计算关键词匹配数
-            matches = len(query_keywords & doc_keywords)
+            # 提取文档的中文字符和英文词
+            doc_chinese_chars = set(re.findall(r'[\u4e00-\u9fa5]', content_lower))
+            doc_english_words = set(re.findall(r'[a-zA-Z0-9]+', content_lower))
+            
+            # 计算中文字符匹配率
+            chinese_matches = len(chinese_chars & doc_chinese_chars)
+            chinese_score = chinese_matches / len(chinese_chars) if chinese_chars else 0
+            
+            # 计算英文词匹配率
+            english_matches = len(english_words & doc_english_words)
+            english_score = english_matches / len(english_words) if english_words else 0
+            
+            # 综合分数
+            total_score = chinese_score + english_score
             
             # 如果有匹配，添加到结果
-            if matches > 0:
-                # 计算相关性分数（考虑查询词在文档中出现的次数）
-                score = matches / len(query_keywords) if query_keywords else 0
-                
+            if total_score > 0:
                 # 创建一个类似Document的对象
                 class DocResult:
                     def __init__(self, page_content, metadata):
                         self.page_content = page_content
                         self.metadata = metadata
                 
-                scored_results.append((DocResult(doc['content'], doc['metadata']), score))
+                scored_results.append((DocResult(doc['content'], doc['metadata']), total_score))
         
         # 按分数排序
         scored_results.sort(key=lambda x: x[1], reverse=True)
@@ -372,7 +380,7 @@ class KnowledgeBaseTool:
             path: 加载路径
         
         Returns:
-            bool: 是否加载成功
+            bool: 是否成功加载了文档列表
         """
         try:
             # 首先加载文档列表
@@ -381,6 +389,8 @@ class KnowledgeBaseTool:
                 with open(docs_path, "r", encoding="utf-8") as f:
                     self.documents = json.load(f)
                 print(f"加载了 {len(self.documents)} 个文档")
+                # 如果没有embeddings，仍然返回True表示文档列表加载成功
+                return True
             
             # 尝试加载向量存储
             if os.path.exists(path) and self.embeddings is not None:
