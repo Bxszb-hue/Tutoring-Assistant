@@ -1,39 +1,48 @@
 from typing import Dict, Any, Optional, List
 from ai.state import UserState
-from ai.knowledge_base import KnowledgeBaseTool
-from langchain.schema import Document
+from ai.knowledge_base_simple import SimpleKnowledgeBaseTool
+from ai.llm_client import llm_complete
 import time
 
+class SimpleDocument:
+    """简化的文档类，用于兼容"""
+    def __init__(self, page_content: str, metadata: Dict[str, Any] = None):
+        self.page_content = page_content
+        self.metadata = metadata or {}
+
 class QAAgent:
-    def __init__(self):
+    def __init__(self, llm_provider: str = None):
         """
         初始化问答智能体
         """
-        self.knowledge_base = KnowledgeBaseTool()
-        # 尝试加载已有的向量存储
-        self.knowledge_base.load()
+        self.knowledge_base = SimpleKnowledgeBaseTool()
+        try:
+            self.knowledge_base.load()
+        except:
+            pass
+        self.llm_provider = llm_provider
         
-    def retrieve_relevant_documents(self, query: str, k: int = 3) -> List[Document]:
+    def retrieve_relevant_documents(self, query: str, k: int = 3) -> List[SimpleDocument]:
         """
         检索相关文档
-        
+
         Args:
             query: 用户查询
             k: 返回的文档数量
-        
+
         Returns:
-            List[Document]: 相关文档列表
+            List[SimpleDocument]: 相关文档列表
         """
         return self.knowledge_base.search(query, k=k)
     
-    def build_prompt(self, query: str, documents: List[Document]) -> str:
+    def build_prompt(self, query: str, documents: List[SimpleDocument]) -> str:
         """
         构建提示词
-        
+
         Args:
             query: 用户查询
             documents: 相关文档列表
-        
+
         Returns:
             str: 构建好的提示词
         """
@@ -41,7 +50,7 @@ class QAAgent:
         for i, doc in enumerate(documents):
             context += f"[{i+1}] {doc.page_content}\n"
             context += f"来源: {doc.metadata.get('source', '未知')}\n\n"
-        
+
         prompt = f"""
 你是一个专业的辅导员学生管理智能助手，需要根据提供的知识库信息回答用户的问题。
 
@@ -57,35 +66,53 @@ class QAAgent:
 3. 保持专业、友好的语气
 4. 引用相关来源（如果有）
 """
-        
+
         return prompt
     
     def generate_answer(self, query: str) -> str:
         """
         生成回答（RAG增强）
-        
+
         Args:
             query: 用户查询
-        
+
         Returns:
             str: 生成的回答
         """
         # 检索相关文档
         documents = self.retrieve_relevant_documents(query, k=3)
-        
+
         if not documents:
-            return "抱歉，我暂时没有关于这个问题的信息。"
-        
+            return "抱歉，我暂时没有关于这个问题的信息。建议您联系辅导员或相关部门获取更准确的信息。"
+
         # 构建提示词
         prompt = self.build_prompt(query, documents)
-        
-        # 这里可以集成大语言模型进行生成
-        # 由于是示例，我们使用规则生成回答
-        answer = self.generate_answer_with_rules(prompt, documents)
-        
+
+        # 优先使用大模型生成回答，如果失败则回退到规则方法
+        answer = self.generate_answer_with_llm(prompt, documents)
+
         return answer
     
-    def generate_answer_with_rules(self, prompt: str, documents: List[Document]) -> str:
+    def generate_answer_with_llm(self, prompt: str, documents: List[SimpleDocument]) -> str:
+        """
+        使用大模型生成回答
+
+        Args:
+            prompt: 提示词
+            documents: 相关文档列表
+
+        Returns:
+            str: 生成的回答
+        """
+        try:
+            # 调用大模型
+            answer = llm_complete(prompt, provider=self.llm_provider, temperature=0.7)
+            return answer
+        except Exception as e:
+            # 如果大模型调用失败，回退到规则方法
+            return self.generate_answer_with_rules(prompt, documents)
+
+    def generate_answer_with_rules(self, prompt: str, documents: List[SimpleDocument]) -> str:
         """
         使用规则生成回答
         
@@ -120,31 +147,26 @@ class QAAgent:
     def check_need_human_intervention(self, query: str) -> bool:
         """
         检查是否需要人工干预
-        
+
         Args:
             query: 用户查询
-        
+
         Returns:
             bool: 是否需要人工干预
         """
         # 检索相关文档
-        results = self.knowledge_base.search_with_score(query, k=1)
-        
+        results = self.knowledge_base.search(query, k=1)
+
         if not results:
             return True
-        
-        # 检查相似度分数
-        doc, score = results[0]
-        if score > 0.5:  # 相似度阈值
-            return True
-        
+
         # 检查是否是复杂问题
-        complex_keywords = ["如何申请", "流程", "步骤", "政策", "法规"]
+        complex_keywords = ["如何申请", "流程", "步骤", "政策", "法规", "退学", "休学", "开除"]
         if any(keyword in query for keyword in complex_keywords):
             # 对于复杂问题，即使有相关信息也可能需要人工干预
             if len(results) < 2:
                 return True
-        
+
         return False
 
 # 问答节点函数

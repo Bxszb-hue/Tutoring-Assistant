@@ -7,17 +7,12 @@ from dotenv import load_dotenv
 # 加载环境变量
 load_dotenv()
 
-# 获取数据库连接信息
-DB_USER = os.getenv("DB_USER", "root")
-DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
-DB_PORT = os.getenv("DB_PORT", "3306")
+# 使用SQLite数据库（无需额外服务）
 DB_NAME = os.getenv("DB_NAME", "counselor_agent")
-
-# 创建数据库URL
-DATABASE_URL = f"mysql+pymysql://{DB_USER}:123456@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+DATABASE_URL = f"sqlite:///{DB_NAME}.db"
 
 # 创建数据库引擎
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 # 创建会话工厂
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

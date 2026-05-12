@@ -1,36 +1,32 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 import logging
-import json
+import sys
+import os
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# 添加项目路径到sys.path（放在所有导入之前）
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 # 尝试导入必要的模块
 try:
     from ai.state import UserState
-    from ai.workflow import create_workflow
-    from .database import get_db, engine, Base
-    from .business_integration import BusinessSystemIntegration
+    from ai.counselor_workflow import create_counselor_workflow
+    from ai.student_workflow import create_student_workflow
+    from backend.database import get_db, engine, Base
+    from backend.knowledge_base_api import router as kb_router
     logger.info("Successfully imported all modules")
 except Exception as e:
     logger.error(f"Error importing modules: {str(e)}")
     raise
-
-# 配置本地Ollama模型
-try:
-    from langchain_ollama import OllamaLLM
-    # 初始化Ollama模型
-    llm = OllamaLLM(model="qwen2.5:7b", base_url="http://localhost:11434")
-    logger.info("Successfully initialized Ollama model")
-except Exception as e:
-    logger.error(f"Error initializing Ollama model: {str(e)}")
-    llm = None
 
 # 创建数据库表
 try:
@@ -51,12 +47,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 注册知识库路由
+app.include_router(kb_router)
+
 # 初始化工作流
 try:
-    workflow = create_workflow()
-    logger.info("Successfully initialized workflow")
+    counselor_workflow = create_counselor_workflow()
+    student_workflow = create_student_workflow()
+    logger.info("Successfully initialized workflows")
 except Exception as e:
-    logger.error(f"Error initializing workflow: {str(e)}")
+    logger.error(f"Error initializing workflows: {str(e)}")
     raise
 
 class MessageRequest(BaseModel):
@@ -67,6 +67,32 @@ class MessageRequest(BaseModel):
 class MessageResponse(BaseModel):
     response: str
     agent: str
+
+class ChatMessageRequest(BaseModel):
+    session_id: str
+    sender_id: str
+    sender_name: str
+    sender_role: str
+    content: str
+
+class ChatMessageResponse(BaseModel):
+    id: int
+    session_id: str
+    sender_id: str
+    sender_name: str
+    sender_role: str
+    content: str
+    created_at: str
+
+class ChatSessionResponse(BaseModel):
+    session_id: str
+    student_id: str
+    student_name: str
+    counselor_id: str
+    counselor_name: str
+    last_message: str | None
+    last_message_time: str | None
+    unread_count: int
 
 @app.post("/chat", response_model=MessageResponse)
 async def chat(request: MessageRequest):
@@ -84,30 +110,36 @@ async def chat(request: MessageRequest):
             ]
         )
         
-        # 运行工作流
-        result = workflow.invoke(state)
-        
-        # 处理返回的结果（可能是字典或 UserState 对象）
-        if isinstance(result, dict):
-            # 如果是字典，使用字典访问方式
-            conversation_history = result.get('conversation_history', [])
+        # 根据用户类型选择工作流
+        if request.user_type == "counselor":
+            final_state = counselor_workflow.run(state)
         else:
-            # 如果是 UserState 对象，使用属性访问方式
-            conversation_history = result.conversation_history
+            final_state = student_workflow.run(state)
         
         # 获取最后一条消息
-        if conversation_history:
-            last_message = conversation_history[-1]
-            return MessageResponse(
-                response=last_message["content"],
-                agent=last_message.get("agent", "system")
-            )
-        else:
-            raise HTTPException(status_code=400, detail="No response generated")
+        if final_state and hasattr(final_state, 'conversation_history') and final_state.conversation_history:
+            last_message = final_state.get_last_message()
+            if last_message and last_message["role"] == "assistant":
+                return MessageResponse(
+                    response=last_message["content"],
+                    agent=last_message.get("agent", "system")
+                )
+        
+        # 如果没有回答，返回默认消息
+        return MessageResponse(
+            response="我暂时无法理解您的问题，请稍后再试。",
+            agent="system"
+        )
     except Exception as e:
         import traceback
-        print(f"Error in chat endpoint: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"Error in chat endpoint: {str(e)}")
+        logger.error(traceback.format_exc())
+        # 捕获编码错误
+        if "codec can't encode character" in str(e):
+            return MessageResponse(
+                response="系统暂时无法处理您的请求，请稍后再试。",
+                agent="system"
+            )
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
@@ -116,176 +148,145 @@ async def health_check():
     try:
         # 测试数据库连接
         from sqlalchemy import text
-        from .database import engine
+        from backend.database import engine
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
         return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
 
-# 业务系统集成API
-class TransactionRequest(BaseModel):
-    transaction_type: str
-    transaction_data: dict
-
-class ProcessTransactionRequest(BaseModel):
-    status: str
-    approver: str
-
-@app.get("/api/student/{student_id}/info")
-async def get_student_info(student_id: str, db: Session = Depends(get_db)):
-    """获取学生详细信息"""
+@app.post("/chat/message")
+async def send_message(request: ChatMessageRequest, db: Session = Depends(get_db)):
+    """发送聊天消息"""
     try:
-        business = BusinessSystemIntegration(db)
-        info = business.get_student_info(student_id)
-        if not info:
-            raise HTTPException(status_code=404, detail="学生不存在")
-        return info
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/courses")
-async def get_courses(department: str = None, db: Session = Depends(get_db)):
-    """获取课程列表"""
-    try:
-        business = BusinessSystemIntegration(db)
-        courses = business.get_courses(department)
-        return courses
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/student/{student_id}/courses")
-async def get_student_courses(student_id: str, semester: str = None, db: Session = Depends(get_db)):
-    """获取学生已选课程"""
-    try:
-        business = BusinessSystemIntegration(db)
-        courses = business.get_student_courses(student_id, semester)
-        return courses
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/student/{student_id}/grades")
-async def get_student_grades(student_id: str, semester: str = None, db: Session = Depends(get_db)):
-    """获取学生成绩"""
-    try:
-        business = BusinessSystemIntegration(db)
-        grades = business.get_student_grades(student_id, semester)
-        return grades
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/student/{student_id}/transactions")
-async def submit_transaction(student_id: str, request: TransactionRequest, db: Session = Depends(get_db)):
-    """提交事务申请"""
-    try:
-        business = BusinessSystemIntegration(db)
-        result = business.submit_transaction(student_id, request.transaction_type, request.transaction_data)
-        if not result["success"]:
-            raise HTTPException(status_code=400, detail=result["message"])
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/student/{student_id}/transactions")
-async def get_student_transactions(student_id: str, status: str = None, db: Session = Depends(get_db)):
-    """获取学生的事务申请"""
-    try:
-        business = BusinessSystemIntegration(db)
-        transactions = business.get_transactions(student_id, status)
-        return transactions
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/transactions/{transaction_id}/process")
-async def process_transaction(transaction_id: int, request: ProcessTransactionRequest, db: Session = Depends(get_db)):
-    """处理事务申请"""
-    try:
-        business = BusinessSystemIntegration(db)
-        result = business.process_transaction(transaction_id, request.status, request.approver)
-        if not result["success"]:
-            raise HTTPException(status_code=400, detail=result["message"])
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/transactions")
-async def get_all_transactions(status: str = None, db: Session = Depends(get_db)):
-    """获取所有事务申请（用于辅导员）"""
-    try:
-        business = BusinessSystemIntegration(db)
-        transactions = business.get_all_transactions(status)
-        return transactions
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# 请假申请API
-class LeaveRequest(BaseModel):
-    leave_type: str
-    start_date: str
-    end_date: str
-    reason: str
-
-class ProcessLeaveRequest(BaseModel):
-    status: str
-    approver: str
-    approver_comment: Optional[str] = None
-
-@app.post("/api/student/{student_id}/leaves")
-async def submit_leave(student_id: str, request: LeaveRequest, db: Session = Depends(get_db)):
-    """提交请假申请"""
-    try:
-        from datetime import datetime
-        start_date = datetime.fromisoformat(request.start_date.replace('Z', '+00:00'))
-        end_date = datetime.fromisoformat(request.end_date.replace('Z', '+00:00'))
+        from backend.models import ChatMessage, ChatSession
+        from sqlalchemy import func
         
-        business = BusinessSystemIntegration(db)
-        result = business.submit_leave(student_id, request.leave_type, start_date, end_date, request.reason)
+        # 创建消息记录
+        new_message = ChatMessage(
+            session_id=request.session_id,
+            sender_id=request.sender_id,
+            sender_name=request.sender_name,
+            sender_role=request.sender_role,
+            content=request.content,
+            created_at=func.now()
+        )
+        db.add(new_message)
         
-        if not result["success"]:
-            raise HTTPException(status_code=400, detail=result["message"])
+        # 更新会话信息
+        session = db.query(ChatSession).filter(ChatSession.session_id == request.session_id).first()
+        if session:
+            session.last_message = request.content
+            session.last_message_time = func.now()
+            # 如果是学生发送的消息，增加辅导员端的未读计数
+            if request.sender_role == "student":
+                session.unread_count = (session.unread_count or 0) + 1
         
-        return result
-    except HTTPException:
-        raise
+        db.commit()
+        
+        return {"status": "success", "message": "消息发送成功"}
     except Exception as e:
+        db.rollback()
+        logger.error(f"Error sending message: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/student/{student_id}/leaves")
-async def get_student_leaves(student_id: str, status: str = None, db: Session = Depends(get_db)):
-    """获取学生的请假记录"""
+@app.get("/chat/sessions/{user_id}")
+async def get_sessions(user_id: str, user_type: str, db: Session = Depends(get_db)):
+    """获取用户的聊天会话列表"""
     try:
-        business = BusinessSystemIntegration(db)
-        leaves = business.get_student_leaves(student_id, status)
-        return leaves
+        from backend.models import ChatSession
+        
+        if user_type == "counselor":
+            sessions = db.query(ChatSession).filter(
+                ChatSession.counselor_id == user_id
+            ).order_by(ChatSession.last_message_time.desc()).all()
+        else:
+            sessions = db.query(ChatSession).filter(
+                ChatSession.student_id == user_id
+            ).all()
+        
+        result = []
+        for session in sessions:
+            result.append({
+                "session_id": session.session_id,
+                "student_id": session.student_id,
+                "student_name": session.student_name,
+                "counselor_id": session.counselor_id,
+                "counselor_name": session.counselor_name,
+                "last_message": session.last_message,
+                "last_message_time": session.last_message_time.isoformat() if session.last_message_time else None,
+                "unread_count": session.unread_count or 0
+            })
+        
+        return {"status": "success", "data": result}
     except Exception as e:
+        logger.error(f"Error getting sessions: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/leaves")
-async def get_all_leaves(status: str = None, db: Session = Depends(get_db)):
-    """获取所有请假申请（用于辅导员）"""
+@app.get("/chat/messages/{session_id}")
+async def get_messages(session_id: str, db: Session = Depends(get_db)):
+    """获取会话的消息列表"""
     try:
-        business = BusinessSystemIntegration(db)
-        leaves = business.get_all_leaves(status)
-        return leaves
+        from backend.models import ChatMessage, ChatSession
+        
+        messages = db.query(ChatMessage).filter(
+            ChatMessage.session_id == session_id
+        ).order_by(ChatMessage.created_at).all()
+        
+        result = []
+        for msg in messages:
+            result.append({
+                "id": msg.id,
+                "session_id": msg.session_id,
+                "sender_id": msg.sender_id,
+                "sender_name": msg.sender_name,
+                "sender_role": msg.sender_role,
+                "content": msg.content,
+                "created_at": msg.created_at.isoformat()
+            })
+        
+        # 标记已读
+        session = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
+        if session:
+            session.unread_count = 0
+            db.commit()
+        
+        return {"status": "success", "data": result}
     except Exception as e:
+        logger.error(f"Error getting messages: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/leaves/{leave_id}/process")
-async def process_leave(leave_id: int, request: ProcessLeaveRequest, db: Session = Depends(get_db)):
-    """处理请假申请"""
+@app.post("/chat/session")
+async def create_session(request: dict, db: Session = Depends(get_db)):
+    """创建聊天会话"""
     try:
-        business = BusinessSystemIntegration(db)
-        result = business.process_leave(leave_id, request.status, request.approver, request.approver_comment)
+        from backend.models import ChatSession
         
-        if not result["success"]:
-            raise HTTPException(status_code=400, detail=result["message"])
+        session_id = request.get("session_id", f"chat_{hash(request.get('student_id', '') + request.get('counselor_id', ''))}")
         
-        return result
-    except HTTPException:
-        raise
+        # 检查是否已存在会话
+        existing = db.query(ChatSession).filter(
+            ChatSession.student_id == request.get("student_id")
+        ).filter(
+            ChatSession.counselor_id == request.get("counselor_id")
+        ).first()
+        
+        if existing:
+            return {"status": "success", "session_id": existing.session_id}
+        
+        new_session = ChatSession(
+            session_id=session_id,
+            student_id=request.get("student_id"),
+            student_name=request.get("student_name"),
+            counselor_id=request.get("counselor_id"),
+            counselor_name=request.get("counselor_name"),
+            unread_count=0
+        )
+        db.add(new_session)
+        db.commit()
+        
+        return {"status": "success", "session_id": session_id}
     except Exception as e:
+        db.rollback()
+        logger.error(f"Error creating session: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

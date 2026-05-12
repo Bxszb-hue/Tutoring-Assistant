@@ -153,6 +153,57 @@
         </div>
       </div>
     </div>
+
+    <Modal
+      v-if="modalVisible"
+      :visible="modalVisible"
+      :title="`处理预警 - ${selectedWarning?.studentName}`"
+      :show-footer="true"
+      :show-cancel="true"
+      :confirm-text="confirmText"
+      @close="modalVisible = false"
+      @confirm="handleModalConfirm"
+    >
+      <div v-if="selectedWarning" class="space-y-4">
+        <div class="grid grid-cols-2 gap-4">
+          <div class="bg-gray-50 rounded-lg p-4">
+            <p class="text-sm text-gray-500">预警类型</p>
+            <p class="font-medium text-gray-900">{{ selectedWarning.type }}</p>
+          </div>
+          <div class="bg-gray-50 rounded-lg p-4">
+            <p class="text-sm text-gray-500">预警等级</p>
+            <p :class="['font-medium', getLevelColor(selectedWarning.level)]">{{ selectedWarning.level }}</p>
+          </div>
+        </div>
+        
+        <div class="bg-gray-50 rounded-lg p-4">
+          <p class="text-sm text-gray-500 mb-2">预警原因</p>
+          <p class="text-gray-900">{{ selectedWarning.reason }}</p>
+        </div>
+
+        <div>
+          <p class="text-sm text-gray-500 mb-2">当前状态</p>
+          <select
+            v-model="newStatus"
+            class="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="待处理">待处理</option>
+            <option value="处理中">处理中</option>
+            <option value="已解决">已解决</option>
+          </select>
+        </div>
+
+        <div>
+          <p class="text-sm text-gray-500 mb-2">处理备注（可选）</p>
+          <textarea
+            v-model="remark"
+            rows="3"
+            class="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+            placeholder="请输入处理备注..."
+          ></textarea>
+        </div>
+      </div>
+    </Modal>
   </div>
 </template>
 
@@ -160,11 +211,22 @@
 import { ref, computed } from 'vue'
 import { AlertTriangle, Clock, CheckCircle, BarChart3 } from 'lucide-vue-next'
 import { useWarningsStore } from '@/stores/warnings'
+import Modal from '@/components/Modal.vue'
 
 const warningsStore = useWarningsStore()
 
 const filterType = ref('')
 const filterStatus = ref('')
+const modalVisible = ref(false)
+const selectedWarning = ref<any>(null)
+const newStatus = ref('')
+const remark = ref('')
+
+const confirmText = computed(() => {
+  if (newStatus.value === '已解决') return '标记为已解决'
+  if (newStatus.value === '处理中') return '转为处理中'
+  return '保存更改'
+})
 
 const filteredWarnings = computed(() => {
   let warnings = warningsStore.warnings
@@ -180,7 +242,26 @@ const filteredWarnings = computed(() => {
   return warnings
 })
 
+const getLevelColor = (level: string) => {
+  const colors: Record<string, string> = {
+    '轻度': 'text-green-600',
+    '中度': 'text-yellow-600',
+    '重度': 'text-red-600'
+  }
+  return colors[level] || 'text-gray-600'
+}
+
 const handleWarning = (warning: any) => {
-  alert(`处理预警：${warning.studentName} - ${warning.type}`)
+  selectedWarning.value = warning
+  newStatus.value = warning.status
+  remark.value = warning.remark || ''
+  modalVisible.value = true
+}
+
+const handleModalConfirm = () => {
+  if (selectedWarning.value) {
+    warningsStore.updateWarningStatus(selectedWarning.value.id, newStatus.value as any, remark.value)
+  }
+  modalVisible.value = false
 }
 </script>
