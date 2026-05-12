@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { useStudentsStore } from './students'
 
 export type UserRole = 'counselor' | 'student'
 
@@ -58,21 +59,30 @@ export const useAuthStore = defineStore('auth', () => {
         return true
       }
     } else {
-      if (username === 'student' && password === '123456') {
-        currentUser.value = {
-          id: 'student_1',
-          name: '张伟',
-          role: 'student',
-          email: 'zhangwei@university.edu',
-          phone: '13812345678',
-          className: '2021级1班',
-          studentId: '20210001',
-          counselorId: 'counselor_1'
+      if (password === '123456') {
+        const studentsStore = useStudentsStore()
+        if (!studentsStore.students.length) {
+          studentsStore.loadStudents()
         }
-        isAuthenticated.value = true
-        saveUser()
-        loading.value = false
-        return true
+        
+        const student = studentsStore.students.find(s => s.studentId === username || s.id === username)
+        
+        if (student) {
+          currentUser.value = {
+            id: student.id,
+            name: student.name,
+            role: 'student',
+            email: student.contact.email,
+            phone: student.contact.phone,
+            className: student.className,
+            studentId: student.studentId,
+            counselorId: 'counselor_1'
+          }
+          isAuthenticated.value = true
+          saveUser()
+          loading.value = false
+          return true
+        }
       }
     }
     

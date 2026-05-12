@@ -1,5 +1,5 @@
 <template>
-  <div class="flex flex-col h-full bg-white">
+  <div ref="chatContainer" class="flex flex-col h-full bg-white">
     <div class="p-4 border-b border-gray-200 bg-gradient-to-r from-blue-600 to-purple-600">
       <div class="flex items-center gap-3">
         <div class="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
@@ -32,7 +32,7 @@
           <button
             v-for="(suggestion, index) in suggestions"
             :key="index"
-            @click="sendMessage(suggestion)"
+            @click="handleSuggestionClick(suggestion)"
             class="block w-full text-left px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-gray-700 transition-colors"
           >
             {{ suggestion }}
@@ -119,12 +119,23 @@
       </div>
     </div>
   </div>
+  
+  <NotificationForm
+    :visible="showNotificationForm"
+    @close="handleNotificationClose"
+    @send="handleNotificationSend"
+  />
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
-import { Sparkles, Send, AlertCircle } from 'lucide-vue-next'
+import { Sparkles, Send, AlertCircle, Download } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
+import { useNotificationsStore } from '@/stores/notifications'
+import { useStudentsStore } from '@/stores/students'
+import NotificationForm from './NotificationForm.vue'
+import { exportToExcel, generateStudentReport } from '@/utils/excel'
+import { generateWarningWordReport, generateWorkWordReport, downloadBlob } from '@/utils/word'
 
 const props = defineProps<{
   title?: string
@@ -137,6 +148,8 @@ const props = defineProps<{
 }>()
 
 const authStore = useAuthStore()
+const notificationsStore = useNotificationsStore()
+const studentsStore = useStudentsStore()
 
 const messages = ref<Array<{
   role: 'user' | 'assistant'
@@ -147,6 +160,7 @@ const inputMessage = ref('')
 const isTyping = ref(false)
 const backendConnected = ref(false)
 const messagesContainer = ref<HTMLElement | null>(null)
+const showNotificationForm = ref(false)
 
 const title = computed(() => props.title || 'AI助手')
 const subtitle = computed(() => props.subtitle || '智能辅助')
@@ -173,17 +187,222 @@ const scrollToBottom = () => {
   })
 }
 
-const handleQuickAction = (event: any) => {
+const handleSuggestionClick = (suggestion: string) => {
+  if (suggestion === '发布通知') {
+    showNotificationForm.value = true
+    return
+  }
+  
+  if (suggestion === '报表生成') {
+    const reportData = generateStudentReport()
+    exportToExcel(reportData)
+    
+    messages.value.push({
+      role: 'user',
+      content: '请帮我生成报表',
+      timestamp: Date.now()
+    })
+    
+    messages.value.push({
+      role: 'assistant',
+      content: '✅ 学生综合统计报表已生成！\n\n报表包含以下内容：\n- 学生概况（总数、男女比例、平均GPA等）\n- 风险等级分布\n- 班级统计\n- 挂科统计\n\n📥 已为您下载Excel文件。',
+      timestamp: Date.now()
+    })
+    scrollToBottom()
+    return
+  }
+  
+  if (suggestion === '预警统计') {
+    const warningBlob = generateWarningWordReport()
+    downloadBlob(warningBlob, `学业预警报告_${new Date().toISOString().split('T')[0]}.docx`)
+    
+    messages.value.push({
+      role: 'user',
+      content: '请帮我查看预警统计',
+      timestamp: Date.now()
+    })
+    
+    messages.value.push({
+      role: 'assistant',
+      content: '✅ 学业预警报告已生成！\n\n报告包含以下内容：\n- 预警类型分布（学业/心理/日常）\n- 预警等级分布（轻度/中度/重度）\n- 预警学生名单及原因\n- 预警处理情况统计\n- 建议措施\n\n📥 已为您下载Word文档。',
+      timestamp: Date.now()
+    })
+    scrollToBottom()
+    return
+  }
+  
+  if (suggestion === '工作报告生成') {
+    const warningBlob = generateWarningWordReport()
+    downloadBlob(warningBlob, `学业预警报告_${new Date().toISOString().split('T')[0]}.docx`)
+    
+    const workBlob = generateWorkWordReport()
+    downloadBlob(workBlob, `辅导员工作报告_${new Date().toISOString().split('T')[0]}.docx`)
+    
+    messages.value.push({
+      role: 'user',
+      content: '请帮我生成工作报告',
+      timestamp: Date.now()
+    })
+    
+    messages.value.push({
+      role: 'assistant',
+      content: '✅ 辅导员工作报告已生成！\n\n已调用预警统计智能体获取预警数据，并生成以下报告：\n\n📄 辅导员工作报告包含：\n- 工作概况（谈心谈话、家访等）\n- 预警管理情况\n- 事务办理统计\n- 活动组织记录\n- 月度总结\n\n📄 学业预警报告包含：\n- 预警类型分布\n- 预警等级分布\n- 预警学生名单\n- 预警处理情况\n\n📥 已为您下载两份Word文档。',
+      timestamp: Date.now()
+    })
+    scrollToBottom()
+    return
+  }
+  
+  sendMessage(suggestion)
+}
+
+const handleQuickAction = async (event: any) => {
   if (event.detail) {
+    if (event.detail.includes('发布通知')) {
+      showNotificationForm.value = true
+      return
+    }
+    
+    if (event.detail === '报表生成完成') {
+      messages.value.push({
+        role: 'user',
+        content: '请帮我生成报表',
+        timestamp: Date.now()
+      })
+      
+      messages.value.push({
+        role: 'assistant',
+        content: '✅ 学生综合统计报表已生成！\n\n报表包含以下内容：\n- 学生概况（总数、男女比例、平均GPA等）\n- 风险等级分布\n- 班级统计\n- 挂科统计\n\n📥 已为您下载Excel文件。',
+        timestamp: Date.now()
+      })
+      scrollToBottom()
+      return
+    }
+    
+    if (event.detail === '预警统计完成') {
+      messages.value.push({
+        role: 'user',
+        content: '请帮我查看预警统计',
+        timestamp: Date.now()
+      })
+      
+      messages.value.push({
+        role: 'assistant',
+        content: '✅ 学业预警报告已生成！\n\n报告包含以下内容：\n- 预警类型分布（学业/心理/日常）\n- 预警等级分布（轻度/中度/重度）\n- 预警学生名单及原因\n- 预警处理情况统计\n- 建议措施\n\n📥 已为您下载Word文档。',
+        timestamp: Date.now()
+      })
+      scrollToBottom()
+      return
+    }
+    
+    if (event.detail === '工作报告生成完成') {
+      messages.value.push({
+        role: 'user',
+        content: '请帮我生成工作报告',
+        timestamp: Date.now()
+      })
+      
+      messages.value.push({
+        role: 'assistant',
+        content: '✅ 辅导员工作报告已生成！\n\n已调用预警统计智能体获取预警数据，并生成以下报告：\n\n📄 辅导员工作报告包含：\n- 工作概况（谈心谈话、家访等）\n- 预警管理情况\n- 事务办理统计\n- 活动组织记录\n- 月度总结\n\n📄 学业预警报告包含：\n- 预警类型分布\n- 预警等级分布\n- 预警学生名单\n- 预警处理情况\n\n📥 已为您下载两份Word文档。',
+        timestamp: Date.now()
+      })
+      scrollToBottom()
+      return
+    }
+    
+    if (event.detail.includes('生成报表') || event.detail.includes('报表生成')) {
+      const reportData = generateStudentReport()
+      exportToExcel(reportData)
+      
+      messages.value.push({
+        role: 'user',
+        content: '请帮我生成报表',
+        timestamp: Date.now()
+      })
+      
+      messages.value.push({
+        role: 'assistant',
+        content: '✅ 学生综合统计报表已生成！\n\n报表包含以下内容：\n- 学生概况（总数、男女比例、平均GPA等）\n- 风险等级分布\n- 班级统计\n- 挂科统计\n\n📥 已为您下载Excel文件。',
+        timestamp: Date.now()
+      })
+      scrollToBottom()
+      return
+    }
+    
+    if (event.detail.includes('预警统计') || event.detail.includes('查看预警')) {
+      const warningBlob = await generateWarningWordReport()
+      downloadBlob(warningBlob, `学业预警报告_${new Date().toISOString().split('T')[0]}.docx`)
+      
+      messages.value.push({
+        role: 'user',
+        content: '请帮我查看预警统计',
+        timestamp: Date.now()
+      })
+      
+      messages.value.push({
+        role: 'assistant',
+        content: '✅ 学业预警报告已生成！\n\n报告包含以下内容：\n- 预警类型分布（学业/心理/日常）\n- 预警等级分布（轻度/中度/重度）\n- 预警学生名单及原因\n- 预警处理情况统计\n- 建议措施\n\n📥 已为您下载Word文档。',
+        timestamp: Date.now()
+      })
+      scrollToBottom()
+      return
+    }
+    
+    if (event.detail.includes('工作报告') || event.detail.includes('工作报告生成')) {
+      const warningBlob = await generateWarningWordReport()
+      downloadBlob(warningBlob, `学业预警报告_${new Date().toISOString().split('T')[0]}.docx`)
+      
+      const workBlob = await generateWorkWordReport()
+      downloadBlob(workBlob, `辅导员工作报告_${new Date().toISOString().split('T')[0]}.docx`)
+      
+      messages.value.push({
+        role: 'user',
+        content: '请帮我生成工作报告',
+        timestamp: Date.now()
+      })
+      
+      messages.value.push({
+        role: 'assistant',
+        content: '✅ 辅导员工作报告已生成！\n\n已调用预警统计智能体获取预警数据，并生成以下报告：\n\n📄 辅导员工作报告包含：\n- 工作概况（谈心谈话、家访等）\n- 预警管理情况\n- 事务办理统计\n- 活动组织记录\n- 月度总结\n\n📄 学业预警报告包含：\n- 预警类型分布\n- 预警等级分布\n- 预警学生名单\n- 预警处理情况\n\n📥 已为您下载两份Word文档。',
+        timestamp: Date.now()
+      })
+      scrollToBottom()
+      return
+    }
+    
     inputMessage.value = event.detail
     handleSend()
   }
 }
 
+const handleNotificationSend = (data: { title: string; content: string; targetClasses: string[]; type: string; totalStudents: number }) => {
+  notificationsStore.addNotification(data.title, data.content, data.type, data.targetClasses)
+  
+  messages.value.push({
+    role: 'user',
+    content: `发布通知：${data.title}`,
+    timestamp: Date.now()
+  })
+  
+  messages.value.push({
+    role: 'assistant',
+    content: `✅ 通知发布成功！\n\n📋 **通知详情**\n标题：${data.title}\n类型：${data.type}\n目标班级：${data.targetClasses.join('、')}\n内容：${data.content}\n\n📤 已发送至 ${data.targetClasses.length} 个班级，共 ${data.totalStudents} 名学生将收到通知。`,
+    timestamp: Date.now()
+  })
+  
+  showNotificationForm.value = false
+  scrollToBottom()
+}
+
+const handleNotificationClose = () => {
+  showNotificationForm.value = false
+}
+
 onMounted(async () => {
   window.addEventListener('quickAction', handleQuickAction)
   try {
-    const response = await fetch('http://localhost:8000/health')
+    const response = await fetch('http://localhost:8005/health')
     backendConnected.value = response.ok
   } catch {
     backendConnected.value = false
@@ -202,6 +421,127 @@ const sendMessage = async (text?: string) => {
   const message = text || inputMessage.value
   if (!message.trim() || isTyping.value) return
   
+  if (message.includes('发布通知') || message.includes('发送通知') || message.includes('通知学生')) {
+    showNotificationForm.value = true
+    inputMessage.value = ''
+    return
+  }
+  
+  if (props.role === 'student' && (message.includes('成绩') || message.includes('GPA') || message.includes('学分'))) {
+    studentsStore.loadStudents()
+    const studentId = authStore.currentUser?.id || ''
+    const student = studentsStore.students.find(s => s.id === studentId)
+    
+    let response = ''
+    if (student) {
+      const { gpa, attendanceRate, failedCourses } = student.grades
+      const riskLevel = student.riskLevel
+      
+      response = `📚 **学业情况查询**
+
+根据您的记录：
+- 当前GPA: ${gpa}
+- 出勤率: ${attendanceRate}%
+- 挂科课程: ${failedCourses}门
+- 风险等级: ${riskLevel}
+
+💡 **学习建议**
+${failedCourses > 0 ? '⚠️ 建议关注挂科课程，及时与任课老师沟通' : '✅ 继续保持良好的学习状态'}
+${attendanceRate < 80 ? '⚠️ 出勤率较低，请尽量按时上课' : ''}
+
+需要我帮您查看其他信息吗？`
+    } else {
+      response = `📚 **学业情况查询**
+
+抱歉，未找到您的成绩记录。请确保已登录正确的学生账号。
+
+如需帮助，请联系您的辅导员。`
+    }
+    
+    messages.value.push({
+      role: 'user',
+      content: message,
+      timestamp: Date.now()
+    })
+    
+    messages.value.push({
+      role: 'assistant',
+      content: response,
+      timestamp: Date.now()
+    })
+    
+    inputMessage.value = ''
+    scrollToBottom()
+    return
+  }
+  
+  if (message.includes('报表生成') || message.includes('生成报表') || 
+      message.includes('学生综合统计报表') || message.includes('学生统计报表')) {
+    const reportData = generateStudentReport()
+    exportToExcel(reportData)
+    
+    messages.value.push({
+      role: 'user',
+      content: message,
+      timestamp: Date.now()
+    })
+    
+    messages.value.push({
+      role: 'assistant',
+      content: '✅ 学生综合统计报表已生成！\n\n报表包含以下内容：\n- 学生概况（总数、男女比例、平均GPA等）\n- 风险等级分布\n- 班级统计\n- 挂科统计\n- 年级分布\n- 奖惩情况\n- 心理健康测评\n\n📥 已为您下载Excel文件。',
+      timestamp: Date.now()
+    })
+    
+    inputMessage.value = ''
+    scrollToBottom()
+    return
+  }
+  
+  if (message.includes('预警统计') || message.includes('预警报告') || message.includes('查看预警')) {
+    const warningBlob = await generateWarningWordReport()
+    downloadBlob(warningBlob, `学业预警报告_${new Date().toISOString().split('T')[0]}.docx`)
+    
+    messages.value.push({
+      role: 'user',
+      content: message,
+      timestamp: Date.now()
+    })
+    
+    messages.value.push({
+      role: 'assistant',
+      content: '✅ 学业预警报告已生成！\n\n报告包含以下内容：\n- 预警类型分布（学业/心理/日常）\n- 预警等级分布（轻度/中度/重度）\n- 预警学生名单及原因\n- 预警处理情况统计\n- 预警趋势分析\n- 建议措施\n\n📥 已为您下载Word文档。',
+      timestamp: Date.now()
+    })
+    
+    inputMessage.value = ''
+    scrollToBottom()
+    return
+  }
+  
+  if (message.includes('工作报告') || message.includes('工作报告生成')) {
+    const warningBlob = await generateWarningWordReport()
+    downloadBlob(warningBlob, `学业预警报告_${new Date().toISOString().split('T')[0]}.docx`)
+    
+    const workBlob = await generateWorkWordReport()
+    downloadBlob(workBlob, `辅导员工作报告_${new Date().toISOString().split('T')[0]}.docx`)
+    
+    messages.value.push({
+      role: 'user',
+      content: message,
+      timestamp: Date.now()
+    })
+    
+    messages.value.push({
+      role: 'assistant',
+      content: '✅ 辅导员工作报告已生成！\n\n已调用预警统计智能体获取预警数据，并生成以下报告：\n\n📄 辅导员工作报告包含：\n- 工作概况（谈心谈话、家访等）\n- 预警管理情况\n- 事务办理统计\n- 活动组织记录\n- 工作时间分布\n- 学生满意度统计\n- 月度总结\n\n📄 学业预警报告包含：\n- 预警类型分布\n- 预警等级分布\n- 预警学生名单\n- 预警处理情况\n\n📥 已为您下载两份Word文档。',
+      timestamp: Date.now()
+    })
+    
+    inputMessage.value = ''
+    scrollToBottom()
+    return
+  }
+  
   messages.value.push({
     role: 'user',
     content: message,
@@ -217,17 +557,25 @@ const sendMessage = async (text?: string) => {
   try {
     let response = ''
     
+    // 每次发送消息时重新检查后端连接
+    try {
+      const healthResponse = await fetch('http://localhost:8005/health')
+      backendConnected.value = healthResponse.ok
+    } catch {
+      backendConnected.value = false
+    }
+    
     if (backendConnected.value) {
       try {
-        const apiResponse = await fetch('http://localhost:8000/api/chat', {
+        const apiResponse = await fetch('http://localhost:8005/chat', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            message: message,
-            role: props.role || 'student',
-            user_id: authStore.currentUser?.id
+            user_id: authStore.currentUser?.id || 'test_user',
+            user_type: props.role || 'student',
+            content: message
           })
         })
         
@@ -351,25 +699,34 @@ const generateMockResponse = async (userMessage: string): Promise<string> => {
 请告诉我您需要什么帮助？`
   } else {
     if (lowerMessage.includes('成绩') || lowerMessage.includes('gpa') || lowerMessage.includes('学分')) {
-      return `📚 **学业情况查询**
+      studentsStore.loadStudents()
+      const studentId = authStore.currentUser?.id || ''
+      const student = studentsStore.students.find(s => s.id === studentId)
+      
+      if (student) {
+        const { gpa, attendanceRate, failedCourses } = student.grades
+        const riskLevel = student.riskLevel
+        
+        return `📚 **学业情况查询**
 
 根据您的记录：
-- 当前GPA: 3.5
-- 本学期已修课程: 6门
-- 已获得学分: 18学分
-- 平均成绩: 85分
-
-📈 **成绩趋势**
-- 高等数学: 78分 → 保持
-- 大学英语: 82分 → 进步
-- 程序设计: 88分 → 优秀
+- 当前GPA: ${gpa}
+- 出勤率: ${attendanceRate}%
+- 挂科课程: ${failedCourses}门
+- 风险等级: ${riskLevel}
 
 💡 **学习建议**
-1. 高等数学可以加强练习
-2. 继续保持英语学习势头
-3. 程序设计可以尝试进阶内容
+${failedCourses > 0 ? '⚠️ 建议关注挂科课程，及时与任课老师沟通' : '✅ 继续保持良好的学习状态'}
+${attendanceRate < 80 ? '⚠️ 出勤率较低，请尽量按时上课' : ''}
 
-还有其他问题吗？`
+需要我帮您查看其他信息吗？`
+      } else {
+        return `📚 **学业情况查询**
+
+抱歉，未找到您的成绩记录。请确保已登录正确的学生账号。
+
+如需帮助，请联系您的辅导员。`
+      }
     }
     
     if (lowerMessage.includes('请假') || lowerMessage.includes('销假')) {
@@ -473,4 +830,23 @@ A: 每年8月在线申请，需要家庭经济困难证明。
 watch(messages, () => {
   scrollToBottom()
 }, { deep: true })
+
+defineExpose({
+  addMessage: (userContent: string, assistantContent: string) => {
+    messages.value.push({
+      role: 'user',
+      content: userContent,
+      timestamp: Date.now()
+    })
+    messages.value.push({
+      role: 'assistant',
+      content: assistantContent,
+      timestamp: Date.now()
+    })
+    scrollToBottom()
+  },
+  showNotificationForm: () => {
+    showNotificationForm.value = true
+  }
+})
 </script>

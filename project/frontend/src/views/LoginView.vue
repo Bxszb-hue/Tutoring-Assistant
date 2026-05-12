@@ -40,17 +40,6 @@
             </div>
           </div>
         </div>
-        
-        <div class="flex gap-16">
-          <div>
-            <p class="text-3xl font-bold text-blue-600">50+</p>
-            <p class="text-sm text-gray-500">虚拟学生</p>
-          </div>
-          <div>
-            <p class="text-3xl font-bold text-purple-600">24/7</p>
-            <p class="text-sm text-gray-500">智能服务</p>
-          </div>
-        </div>
       </div>
     </div>
     

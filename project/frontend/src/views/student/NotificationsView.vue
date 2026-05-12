@@ -54,50 +54,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed } from 'vue'
 import { Bell, AlertTriangle, FileText, MessageSquare } from 'lucide-vue-next'
 import { useNotificationsStore } from '@/stores/notifications'
+import { useAuthStore } from '@/stores/auth'
 
 const notificationsStore = useNotificationsStore()
+const authStore = useAuthStore()
 
-const notifications = ref([
-  {
-    id: '1',
-    title: '系统维护通知',
-    content: '系统将于今晚22:00-24:00进行维护，届时系统将无法访问。请提前做好准备。',
-    type: 'system',
-    priority: 'high',
-    read: false,
-    createdAt: '2024-01-15 08:00:00'
-  },
-  {
-    id: '2',
-    title: '期末考试安排',
-    content: '期末考试将于2024年1月20日开始，请查看具体考试安排表。',
-    type: 'system',
-    priority: 'normal',
-    read: false,
-    createdAt: '2024-01-14 10:00:00'
-  },
-  {
-    id: '3',
-    title: '请假申请已批准',
-    content: '您提交的病假申请（2024-01-10 至 2024-01-12）已批准。',
-    type: 'leave',
-    priority: 'normal',
-    read: true,
-    createdAt: '2024-01-10 09:00:00'
-  },
-  {
-    id: '4',
-    title: '心理测评提醒',
-    content: '您有一份心理测评待完成，请在本周内完成测评。',
-    type: 'warning',
-    priority: 'normal',
-    read: true,
-    createdAt: '2024-01-13 14:00:00'
-  }
-])
+const notifications = computed(() => {
+  const studentClass = authStore.currentUser?.className || ''
+  return notificationsStore.notifications.filter(n => {
+    if (!n.targetClasses || n.targetClasses.length === 0) {
+      return true
+    }
+    return n.targetClasses.includes(studentClass)
+  })
+})
 
 const getTypeIcon = (type: string) => {
   const icons: Record<string, any> = {
@@ -138,14 +111,10 @@ const getPriorityText = (priority: string) => {
 }
 
 const handleNotificationClick = (notification: any) => {
-  notification.read = true
   notificationsStore.markAsRead(notification.id)
 }
 
 const markAllAsRead = () => {
-  notifications.value.forEach(n => {
-    n.read = true
-  })
   notificationsStore.markAllAsRead()
 }
 </script>

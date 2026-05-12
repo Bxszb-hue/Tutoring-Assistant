@@ -49,3 +49,30 @@ class Alert(Base):
     is_processed = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     processed_at = Column(DateTime(timezone=True), nullable=True)
+
+class ChatMessage(Base):
+    """聊天消息表"""
+    __tablename__ = "chat_messages"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(50), index=True)
+    sender_id = Column(String(50))
+    sender_name = Column(String(100))
+    sender_role = Column(String(20))  # counselor, student
+    content = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class ChatSession(Base):
+    """聊天会话表"""
+    __tablename__ = "chat_sessions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(50), unique=True, index=True)
+    student_id = Column(String(50), ForeignKey("users.user_id"))
+    student_name = Column(String(100))
+    counselor_id = Column(String(50))
+    counselor_name = Column(String(100))
+    last_message = Column(Text)
+    last_message_time = Column(DateTime(timezone=True))
+    unread_count = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

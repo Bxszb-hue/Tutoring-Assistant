@@ -15,11 +15,34 @@ export interface Warning {
   notes?: string
 }
 
+const STORAGE_KEY = 'warnings_data'
+
 export const useWarningsStore = defineStore('warnings', () => {
   const warnings = ref<Warning[]>([])
   const loading = ref(false)
 
+  const saveToStorage = () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(warnings.value))
+  }
+
+  const loadFromStorage = () => {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) {
+      try {
+        warnings.value = JSON.parse(saved)
+        return true
+      } catch {
+        return false
+      }
+    }
+    return false
+  }
+
   const loadWarnings = () => {
+    if (loadFromStorage()) {
+      return
+    }
+    
     warnings.value = [
       {
         id: 'warning_1',
@@ -57,6 +80,7 @@ export const useWarningsStore = defineStore('warnings', () => {
         updatedAt: '2024-01-13 16:00:00'
       }
     ]
+    saveToStorage()
   }
 
   const statistics = computed(() => {
@@ -88,13 +112,17 @@ export const useWarningsStore = defineStore('warnings', () => {
   })
 
   const updateWarningStatus = (id: string, status: Warning['status'], notes?: string) => {
-    const warning = warnings.value.find(w => w.id === id)
-    if (warning) {
-      warning.status = status
-      warning.updatedAt = new Date().toISOString()
-      if (notes) {
-        warning.notes = notes
+    const index = warnings.value.findIndex(w => w.id === id)
+    if (index !== -1) {
+      const updatedWarning = {
+        ...warnings.value[index],
+        status,
+        updatedAt: new Date().toISOString(),
+        handler: '王辅导员',
+        notes: notes || warnings.value[index].notes
       }
+      warnings.value.splice(index, 1, updatedWarning)
+      saveToStorage()
     }
   }
 
